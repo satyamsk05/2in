@@ -49,7 +49,7 @@ def _write(path: str, data):
 
 
 def _today_str() -> str:
-    return date.today().strftime("%d %b")   # "26 Mar"
+    return date.today().strftime("%Y-%m-%d")   # "2024-03-26"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

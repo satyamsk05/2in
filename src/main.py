@@ -63,7 +63,7 @@ COINS_ENABLED = {
 ACTIVE_COINS = [c for c, v in COINS_ENABLED.items() if v]
 
 INTERVAL_SEC      = 15 * 60
-CANDLE_SETTLE     = 5          # wait N sec after boundary before fetching price
+CANDLE_SETTLE     = 15          # wait N sec after boundary before fetching price
 DASHBOARD_REFRESH = 1.0
 VBAL_START        = 500.0
 BET_MIN_FUNDS     = 3.0
@@ -92,24 +92,46 @@ _tradelog: List[Dict] = []
 _tlock    = threading.Lock()
 _start_time = time.time()
 _redeem_status = "Idle"
+_clob_client = None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # WALLET
 # ═══════════════════════════════════════════════════════════════════════════════
 _VBAL = "data/virtual_balance.json"
+_vbal_lock  = threading.Lock()
+_vbal_cache: Optional[float] = None
 
 def _vbal_read() -> float:
-    try:
-        if os.path.exists(_VBAL):
-            with open(_VBAL) as f:
-                return float(json.load(f).get("balance", VBAL_START))
-    except Exception:
-        pass
-    return VBAL_START
+    global _vbal_cache
+    with _vbal_lock:
+        if _vbal_cache is not None:
+            return _vbal_cache
+        try:
+            if os.path.exists(_VBAL):
+                with open(_VBAL) as f:
+                    _vbal_cache = float(json.load(f).get("balance", VBAL_START))
+                    return _vbal_cache
+        except Exception:
+            pass
+        _vbal_cache = VBAL_START
+        return _vbal_cache
 
 def _vbal_write(b: float):
-    with open(_VBAL,"w") as f:
-        json.dump({"balance": round(b,2)}, f)
+    global _vbal_cache
+    with _vbal_lock:
+        _vbal_cache = b
+        with open(_VBAL,"w") as f:
+            json.dump({"balance": round(b,2)}, f)
+
+def _vbal_update(change: float):
+    global _vbal_cache
+    with _vbal_lock:
+        # Ensure cache is loaded
+        if _vbal_cache is None:
+            _vbal_read()
+        _vbal_cache = round(_vbal_cache + change, 2)
+        with open(_VBAL,"w") as f:
+            json.dump({"balance": _vbal_cache}, f)
 
 def get_wallet_balance() -> float:
     if DRY_RUN:
@@ -131,14 +153,35 @@ def get_in_bets() -> float:
 # MARKET DATA
 # ═══════════════════════════════════════════════════════════════════════════════
 _api_sem = threading.Semaphore(2)
+_session = requests.Session()
+_session.headers.update({"User-Agent": "2in-bot/2.2"})
+
+def _req_get(url: str, timeout: int = 10, max_retries: int = 3):
+    for attempt in range(max_retries):
+        try:
+            r = _session.get(url, timeout=timeout)
+            if r.status_code == 429:
+                wait = 2 ** attempt
+                logging.warning(f"[API] 429 Rate Limit. Waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logging.debug(f"[API] Final attempt failed: {url} | {e}")
+                break
+            time.sleep(1)
+    return None
 
 def _tokens(coin: str, ts: int) -> Optional[Dict]:
     with _api_sem:
         slug = f"{coin.lower()}-updown-15m-{ts}"
     url  = f"https://gamma-api.polymarket.com/events?slug={slug}"
     try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
+        r = _req_get(url, timeout=10)
+        if not r:
+            return None
         events = r.json()
         if not events:
             return None
@@ -159,12 +202,30 @@ def _tokens(coin: str, ts: int) -> Optional[Dict]:
 def _price(token_id: str) -> Optional[float]:
     with _api_sem:
         try:
-            r = requests.get(f"https://clob.polymarket.com/last-trade-price?token_id={token_id}", timeout=8)
-            if r.status_code == 200:
+            r = _req_get(f"https://clob.polymarket.com/last-trade-price?token_id={token_id}", timeout=8)
+            if r and r.status_code == 200:
                 return float(r.json().get("price",0))
         except Exception:
             pass
     return None
+
+def _get_clob_client():
+    global _clob_client
+    if _clob_client is not None:
+        return _clob_client
+    try:
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import ApiCreds
+        from py_clob_client.constants import POLYGON
+        creds  = ApiCreds(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
+        pk     = PRIVATE_KEY.lstrip("0x") if PRIVATE_KEY else ""
+        _clob_client = ClobClient(CLOB_HOST, chain_id=POLYGON, key=pk, creds=creds,
+                                  signature_type=2 if FUNDER_ADDRESS else 1,
+                                  funder=FUNDER_ADDRESS or None)
+        return _clob_client
+    except Exception as e:
+        logging.error(f"[CLOB] Failed to init client: {e}")
+        return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ORDER PLACEMENT
@@ -183,15 +244,10 @@ def _place(token_id: str, amount: float, coin: str,
         return True, price, ot_lbl
 
     try:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType
-        from py_clob_client.constants import POLYGON
-
-        creds  = ApiCreds(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-        pk     = PRIVATE_KEY.lstrip("0x") if PRIVATE_KEY else ""
-        client = ClobClient(CLOB_HOST, chain_id=POLYGON, key=pk, creds=creds,
-                            signature_type=2 if FUNDER_ADDRESS else 1,
-                            funder=FUNDER_ADDRESS or None)
+        client = _get_clob_client()
+        if not client:
+            return False, price, ot_lbl
+        from py_clob_client.clob_types import OrderArgs, OrderType
         size   = round(amount / price, 2)
         if size < 0.1:
             return False, price, ot_lbl
@@ -211,18 +267,16 @@ def _redeem_all():
     if DRY_RUN:
         _redeem_status = "Dry Run"
         return
+    if not WALLET_ADDRESS:
+        _redeem_status = "Skipped (No Wallet)"
+        return
 
     _redeem_status = "Checking..."
     try:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds
-        from py_clob_client.constants import POLYGON
-
-        creds  = ApiCreds(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
-        pk     = PRIVATE_KEY.lstrip("0x") if PRIVATE_KEY else ""
-        client = ClobClient(CLOB_HOST, chain_id=POLYGON, key=pk, creds=creds,
-                            signature_type=2 if FUNDER_ADDRESS else 1,
-                            funder=FUNDER_ADDRESS or None)
+        client = _get_clob_client()
+        if not client:
+            _redeem_status = "Auth Error"
+            return
 
         # 1. Fetch unredeemed positions from Polymarket Data API
         url = f"https://data-api.polymarket.com/positions?user={WALLET_ADDRESS}&redeemable=true"
@@ -375,8 +429,8 @@ class CoinProc:
                 self.log.warning(f"Force-resolving stale position (age={age}s) as LOSS")
                 won = False
                 payout = 0.0
-                fee = amount * 0.0024
-                pnl = -(amount + fee)
+                fee = round(amount * 0.0024, 4)
+                pnl = round(-(amount + fee), 4)
                 
                 _strat.on_result(coin, won)
                 hm.log_bet_result(coin, closed_ts, won, pnl, fee=fee)
@@ -403,18 +457,20 @@ class CoinProc:
         # NET PnL Calculation (including 0.24% fee)
         fee    = round(payout * 0.0024, 4) if won else round(amount * 0.0024, 4)
         pnl    = round(payout - amount - fee, 4) if won else -round(amount + fee, 4)
-
+        
         _strat.on_result(coin, won)
         hm.log_bet_result(coin, closed_ts, won, pnl, fee=fee)
         hm.close_position(coin)
-        hm.record_pnl(pnl, is_dry_run=DRY_RUN)
-        hm.record_fee(fee, is_dry_run=DRY_RUN)
-
-        if DRY_RUN and won:
-            _vbal_write(_vbal_read() + payout)
+        # Update metrics and virtual balance
+        if DRY_RUN:
+            if won:
+                _vbal_update(payout)
         
-        # Update metrics
+        hm.record_fee(fee, is_dry_run=DRY_RUN)
         increment_trade(won)
+        
+        # PnL accounting
+        pnl = payout - amount if won else -amount
         today_data = hm.get_daily_pnl().get(hm._today_str(), {"pnl": 0.0, "v_pnl": 0.0})
         pnl_key = "v_pnl" if DRY_RUN else "pnl"
         today_pnl = today_data.get(pnl_key, 0.0) if isinstance(today_data, dict) else today_data
@@ -436,12 +492,12 @@ class CoinProc:
         self.log.info(f"✅ Resolved: {'WIN' if won else 'LOSS'} | PnL: {pnl:.4f} | Payout: {payout:.4f}")
         update_metric("status", "last_resolution", f"{coin} {'WIN' if won else 'LOSS'}")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SIGNAL PICKER  (random, recovery priority)
-# ═══════════════════════════════════════════════════════════════════════════════
 def _execute_signals(signals: List[Dict], notifier, data_feed):
     if not signals:
         return
+
+    # Prioritize highest step first (Recovery Priority)
+    signals.sort(key=lambda x: x.get("step", 0), reverse=True)
 
     def _execute_one(chosen):
         coin      = chosen["coin"]
@@ -714,7 +770,21 @@ def main():
     logging.getLogger().addHandler(dash_h)
 
     # Telegram startup
-    notifier.notify_startup(ACTIVE_COINS, DRY_RUN)
+    # Load recent history into tradelog for Telegram /history
+    with _tlock:
+        recent = hm.get_bet_history(n=20)
+        for b in recent:
+            res = b.get("result")
+            if res:
+                _tradelog.append({
+                    "coin":      b.get("coin"),
+                    "direction": b.get("direction"),
+                    "amount":    b.get("amount"),
+                    "won":       res == "WIN",
+                    "pnl":       b.get("pnl", 0.0)
+                })
+
+    get_notifier().notify_startup(ACTIVE_COINS, DRY_RUN)
 
     # Dashboard thread
     def _dash():

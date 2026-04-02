@@ -47,7 +47,7 @@ def _write(path: str, data):
 
 
 def _today_str() -> str:
-    return date.today().strftime("%d %b")   # "26 Mar"
+    return date.today().strftime("%Y-%m-%d")   # "2024-03-26"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -109,6 +109,7 @@ def log_bet_result(coin: str, market_ts: int, won: bool, pnl: float, fee: float 
 
 
 def get_bet_history(n: int = 50) -> List[Dict]:
+    """Returns the last n bets."""
     with _lock:
         data = _read(BET_FILE)
         if not isinstance(data, list):
@@ -252,22 +253,24 @@ def get_daily_pnl() -> Dict[str, float]:
 def get_pnl_summary(days: int = 7) -> str:
     """Returns formatted PNL for Telegram /daily_pnl command."""
     data = get_daily_pnl()
-    if not data:
-        return "(no data yet)"
-    # Sort by date — simple string sort works for "DD Mon" if same month
-    # Use reverse insertion order (most recent first)
-    recent = list(data.items())[-days:]
     lines = []
-    total = 0.0
-    for day, stats in reversed(recent):
-        pnl = stats["pnl"] if isinstance(stats, dict) else stats
-        fee = stats.get("fee", 0.0) if isinstance(stats, dict) else 0.0
+    for i in range(days):
+        dt = datetime.now() - timedelta(days=i)
+        iso = dt.strftime("%Y-%m-%d")
+        day_disp = dt.strftime("%d %b")
+        
+        stats = data.get(iso, {"pnl": 0.0, "fee": 0.0})
+        if isinstance(stats, (int, float)):
+            stats = {"pnl": float(stats), "fee": 0.0}
+            
+        pnl = stats.get("pnl", 0.0)
+        fee = stats.get("fee", 0.0)
         
         sign  = "+" if pnl >= 0 else ""
         emoji = "🟢" if pnl >= 0 else "🔴"
-        lines.append(f"{emoji} {day}: {sign}${pnl:.2f} (Fee: ${fee:.2f})")
-        total += pnl
+        lines.append(f"{emoji} {day_disp}: {sign}${pnl:.2f} (Fee: ${fee:.2f})")
     
+    total = get_total_pnl(is_dry_run=False)
     sign  = "+" if total >= 0 else ""
     lines.append(f"━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"Net PnL : {sign}${total:.2f}")
