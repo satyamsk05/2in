@@ -206,9 +206,6 @@ class TelegramBot:
             one_time_keyboard=False,
         )
 
-    # ── hide keyboard (obsolete, but keeping for safety) ───────────
-    async def _cmd_hide(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("⌨️ Re-sending menu...", reply_markup=self._get_kb())
 
     # ── /history ───────────────────────────────────────────────────────────────
     async def _cmd_history(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):

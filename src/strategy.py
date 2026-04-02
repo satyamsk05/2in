@@ -6,6 +6,7 @@ Bet Sequence: 3 → 6 → 13 → 28 → 60 USDC
 import json
 import os
 import time
+import threading
 from utils.gsd_logger import get_gsd_logger
 logger = get_gsd_logger("STRAT")
 from typing import Optional, Dict, List
@@ -129,6 +130,7 @@ class CandleStore:
     def __init__(self, path: str = CANDLE_FILE):
         self.path = path
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        self._lock = threading.Lock()
         self._data: Dict[str, List[Dict]] = self._load()
 
     def _load(self) -> Dict:
@@ -146,21 +148,23 @@ class CandleStore:
 
     def push(self, coin: str, ts: int, close_price: float):
         """Append a candle close. Keeps last 20 per coin."""
-        key = coin.upper()
-        if key not in self._data:
-            self._data[key] = []
-        # avoid duplicates
-        if self._data[key] and self._data[key][-1]["ts"] == ts:
-            return
-        self._data[key].append({"ts": ts, "close": close_price})
-        self._data[key] = self._data[key][-20:]
-        self._flush()
+        with self._lock:
+            key = coin.upper()
+            if key not in self._data:
+                self._data[key] = []
+            # avoid duplicates
+            if self._data[key] and self._data[key][-1]["ts"] == ts:
+                return
+            self._data[key].append({"ts": ts, "close": close_price})
+            self._data[key] = self._data[key][-20:]
+            self._flush()
 
     def get_closes(self, coin: str, n: int = 5) -> List[float]:
         """Return last n close prices for a coin."""
-        key = coin.upper()
-        entries = self._data.get(key, [])
-        return [e["close"] for e in entries[-n:]]
+        with self._lock:
+            key = coin.upper()
+            entries = self._data.get(key, [])
+            return [e["close"] for e in entries[-n:]]
 
 
 # ─── SIGNAL DETECTION ────────────────────────────────────────────────────────

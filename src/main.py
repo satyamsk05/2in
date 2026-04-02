@@ -130,8 +130,11 @@ def get_in_bets() -> float:
 # ═══════════════════════════════════════════════════════════════════════════════
 # MARKET DATA
 # ═══════════════════════════════════════════════════════════════════════════════
+_api_sem = threading.Semaphore(2)
+
 def _tokens(coin: str, ts: int) -> Optional[Dict]:
-    slug = f"{coin.lower()}-updown-5m-{ts}"
+    with _api_sem:
+        slug = f"{coin.lower()}-updown-5m-{ts}"
     url  = f"https://gamma-api.polymarket.com/events?slug={slug}"
     try:
         r = requests.get(url, timeout=10)
@@ -154,12 +157,13 @@ def _tokens(coin: str, ts: int) -> Optional[Dict]:
         return None
 
 def _price(token_id: str) -> Optional[float]:
-    try:
-        r = requests.get(f"https://clob.polymarket.com/last-trade-price?token_id={token_id}", timeout=8)
-        if r.status_code == 200:
-            return float(r.json().get("price",0))
-    except Exception:
-        pass
+    with _api_sem:
+        try:
+            r = requests.get(f"https://clob.polymarket.com/last-trade-price?token_id={token_id}", timeout=8)
+            if r.status_code == 200:
+                return float(r.json().get("price",0))
+        except Exception:
+            pass
     return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -392,8 +396,6 @@ class CoinProc:
                 self.log.warning(f"Resolve failed — no price (age={age}s, will retry)")
             return
 
-        # Store candle for resolved market
-        hm.push_candle(coin, closed_ts, cp)
 
         won    = (cp > 0.5) if direction == "YES" else (cp < 0.5)
         payout = round(amount / entry_price, 4) if won else 0.0
@@ -521,8 +523,16 @@ def main():
             with open(pid_file) as f:
                 old = int(f.read().strip())
             os.kill(old, 0)
-            print(f"[ERROR] Bot already running (PID {old}). Stop first.")
-            sys.exit(1)
+            # If we get here, process exists. Check if it's likely us.
+            try:
+                with open(f"/proc/{old}/cmdline", "r") as cmdf:
+                    if "python" in cmdf.read():
+                        print(f"[ERROR] Bot already running (PID {old}). Stop first.")
+                        sys.exit(1)
+            except:
+                # /proc not available or other error, assume it's us
+                print(f"[ERROR] Bot likely running (PID {old}). Stop first.")
+                sys.exit(1)
         except (ProcessLookupError, ValueError):
             pass
     with open(pid_file,"w") as f:

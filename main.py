@@ -22,17 +22,17 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dotenv import load_dotenv
 
+SRC_DIR = Path(__file__).parent
+sys.path.insert(0, str(SRC_DIR))
+sys.path.insert(0, str(SRC_DIR / "src"))
+
 from utils.gsd_logger import setup_gsd_logging, get_gsd_logger, stop_gsd_logging, log_audit
 
 # ── setup logging ─────────────────────────────────────────────────────────────
-# Initialize centralized, queue-based logging BEFORE other imports if possible
 setup_gsd_logging()
 logger = get_gsd_logger("SYS")
 
 load_dotenv()
-
-SRC_DIR = Path(__file__).parent
-sys.path.insert(0, str(SRC_DIR))
 
 from strategy      import StreakReversalStrategy, Martingale, BET_SEQUENCE
 from data_feed     import DataFeed
@@ -172,8 +172,11 @@ def get_in_bets() -> float:
 # ═══════════════════════════════════════════════════════════════════════════════
 # MARKET DATA
 # ═══════════════════════════════════════════════════════════════════════════════
+_api_sem = threading.Semaphore(2)
+
 def _tokens(coin: str, ts: int) -> Optional[Dict]:
-    slug = f"{coin.lower()}-updown-5m-{ts}"
+    with _api_sem:
+        slug = f"{coin.lower()}-updown-5m-{ts}"
     url  = f"https://gamma-api.polymarket.com/events?slug={slug}"
     try:
         r = requests.get(url, timeout=10)
@@ -196,12 +199,13 @@ def _tokens(coin: str, ts: int) -> Optional[Dict]:
         return None
 
 def _price(token_id: str) -> Optional[float]:
-    try:
-        r = requests.get(f"https://clob.polymarket.com/last-trade-price?token_id={token_id}", timeout=8)
-        if r.status_code == 200:
-            return float(r.json().get("price",0))
-    except Exception:
-        pass
+    with _api_sem:
+        try:
+            r = requests.get(f"https://clob.polymarket.com/last-trade-price?token_id={token_id}", timeout=8)
+            if r.status_code == 200:
+                return float(r.json().get("price",0))
+        except Exception:
+            pass
     return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -436,7 +440,7 @@ class CoinProc:
         if DRY_RUN and won:
             _vbal_write(_vbal_read() + payout)
 
-        # get_notifier().notify_result(coin, direction, amount, won, payout, _mg.get_step(coin))
+        get_notifier().notify_result(coin, direction, amount, won, payout, _mg.get_step(coin))
 
         with _tlock:
             _tradelog.append({"coin":coin, "direction":direction,
@@ -456,9 +460,9 @@ def _pick_and_place(signals: List[Dict], notifier, data_feed):
     if not signals:
         return
 
-    # Recovery coins (step>0) have priority
-    recovery = [s for s in signals if s["step"] > 0]
-    chosen   = random.choice(recovery) if recovery else random.choice(signals)
+    # Recovery coins (step>0) have priority (highest step first)
+    recovery = sorted([s for s in signals if s["step"] > 0], key=lambda x: x["step"], reverse=True)
+    chosen   = recovery[0] if recovery else random.choice(signals)
 
     coin      = chosen["coin"]
     direction = chosen["direction"]
@@ -531,8 +535,16 @@ def main():
             with open(pid_file) as f:
                 old = int(f.read().strip())
             os.kill(old, 0)
-            print(f"[ERROR] Bot already running (PID {old}). Stop first.")
-            sys.exit(1)
+            # If we get here, process exists. Check if it's likely us.
+            try:
+                with open(f"/proc/{old}/cmdline", "r") as cmdf:
+                    if "python" in cmdf.read():
+                        print(f"[ERROR] Bot already running (PID {old}). Stop first.")
+                        sys.exit(1)
+            except:
+                # /proc not available or other error, assume it's us
+                print(f"[ERROR] Bot likely running (PID {old}). Stop first.")
+                sys.exit(1)
         except (ProcessLookupError, ValueError):
             pass
     with open(pid_file,"w") as f:

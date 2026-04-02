@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 from utils.gsd_logger import get_gsd_logger
 logger = get_gsd_logger("HIST")
 
-HISTORY_DIR  = os.path.join(os.path.dirname(__file__), "..", "history")
+HISTORY_DIR  = os.path.join(os.path.dirname(__file__), "history")
 BET_FILE     = os.path.join(HISTORY_DIR, "bet_history.json")
 CANDLE_FILE  = os.path.join(HISTORY_DIR, "candle_history.json")
 POSITION_FILE= os.path.join(HISTORY_DIR, "open_positions.json")
@@ -112,10 +112,6 @@ def log_bet_result(coin: str, market_ts: int, won: bool, pnl: float, fee: float 
         _write(BET_FILE, data)
 
 
-def get_bet_history() -> List[Dict]:
-    with _lock:
-        data = _read(BET_FILE)
-        return data if isinstance(data, list) else []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -152,7 +148,7 @@ def get_candle_history(coin: str, n: int = MAX_CANDLES) -> List[Dict]:
             return []
         return data.get(coin.upper(), [])[-n:]
 
-def get_bet_history(n: int = 10) -> List[Dict]:
+def get_bet_history(n: int = 50) -> List[Dict]:
     """Returns the last n bets."""
     with _lock:
         data = _read(BET_FILE)
