@@ -1,58 +1,54 @@
-# 💎 Polymarket Streak-Reversal Martingale Bot v2.1
+# 💎 Polymarket Streak-Reversal Martingale Bot v2.2
 
-[![Status](https://img.shields.io/badge/Status-Production--Ready-brightgreen)](https://github.com/satyamsk05/5in)
-[![Version](https://img.shields.io/badge/Version-2.1.0-blue)](https://github.com/satyamsk05/5in)
-[![Strategy](https://img.shields.io/badge/Strategy-Martingale--Reversal-orange)](https://github.com/satyamsk05/5in)
+[![Status](https://img.shields.io/badge/Status-Production--Ready-brightgreen)](https://github.com/satyamsk05/2in)
+[![Version](https://img.shields.io/badge/Version-2.2.0-blue)](https://github.com/satyamsk05/2in)
+[![Strategy](https://img.shields.io/badge/Strategy-Martingale--Reversal-orange)](https://github.com/satyamsk05/2in)
+[![Interval](https://img.shields.io/badge/Interval-15--Minute-blueviolet)](https://github.com/satyamsk05/2in)
 
-A high-performance, multi-market trading suite for Polymarket. This bot combines **ultra-low latency data infrastructure** with a refined **streak-reversal strategy** for **5-minute price markets**.
+A professional-grade, multi-market trading suite for Polymarket. This bot specializes in **Streak-Reversal Martingale** strategies on **15-minute price markets**, engineered for 24/7 autonomous stability and high-fidelity monitoring.
 
 ---
 
 ## 🚀 Key Features
 
-### ⚡ Parallel Data Processing
-Processes **BTC, ETH, SOL, and XRP** markets simultaneously using a threaded WebSocket architecture. 
-- **Zero Sequential Delay**: Signals are evaluated and orders placed across all markets in parallel.
-- **WebSocket Health Watchdog**: Automatic re-connection and staleness detection for 24/7 uptime.
-
-### 🛡️ Production Monitoring & Resilience
-Hardened for 24/7 unattended operation:
-- **Redundant RPCs**: Intelligent failover system with parallel nodes to guarantee blockchain read/write integrity even during Polygon network congestion.
-- **Watchdog Supervisor**: The `run.py` launcher monitors the bot process and performs auto-restarts upon crash (including OOM or network failures).
-- **Telegram Watchdog Alerts**: Critical stall detections instantly notify the user to take action.
-- **Discrete PnL Tracking**: Accurate separation of Live (Real) vs Dry Run (Virtual) performance metrics.
+### 🛡️ Production Hardening (New in v2.2)
+Specifically engineered to resolve common bot crashes and race conditions:
+- **API Rate Limiting**: Built-in `Semaphore(2)` prevents `429 Too Many Requests` during high-concurrency market boundaries.
+- **Thread Safety**: `CandleStore` uses atomic `threading.Lock()` to ensure data integrity when processing BTC, ETH, SOL, and XRP simultaneously.
+- **PID Guard + Process Verification**: Prevents multiple instances with robust Linux process checks (via `/proc`), identifying stale PID files automatically.
+- **Recovery Priority**: Smart logic prioritizes trades with the highest Martingale step, focusing on recovering losses first.
 
 ### 🍱 High-Fidelity Terminal Dashboard
-A premium, scroll-free terminal interface using `Rich`:
-- **Real-time Orderbook**: Live `up_ask` and `down_ask` prices.
-- **MG Ladder Overlay**: Visual tracking of Martingale steps per coin.
-- **System Logs**: Fixed internal panel for the last 8 system events.
+A premium, real-time terminal interface built with `Rich`:
+- **Live Orderbook**: Instant monitoring of `up_ask` and `down_ask` prices.
+- **MG Ladder Visualization**: Active tracking of Martingale steps (◉○○○○) and bet amounts per coin.
+- **Unified Logging**: Fixed internal panel showing real-time system events without terminal flicker.
 
 ### 📱 Interactive Telegram Hub
-A full-featured 3x3 menu for mobile management:
-- **Live State**: Quick view of active prices and market timers.
-- **Manual Trade Flow**: Interactive multi-step guide to place custom $N bets on the fly.
-- **PnL Analytics**: Daily and session-based profit/loss reporting with formatting for Telegram.
+Full-featured 3x3 mobile command center:
+- **🖥 Live State**: View current prices and seconds remaining in the market.
+- **🏦 Wallet**: Check Virtual (Dry Run), Real (On-chain), and Locked (In-bets) balances.
+- **⚡ Quick Bet**: Interactive guide to place manual $N trades on the fly.
+- **📊 PnL Analytics**: Daily and 7-day profit/loss reporting with detailed fee tracking.
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Project Structure
 
-```
-5in/
+```text
+2in/
 ├── src/
-│   ├── main.py                # Core execution loop (Parallel)
+│   ├── main.py                # Core execution loop & Parallel processor
 │   ├── data_feed.py           # Multi-market WebSocket client
-│   ├── strategy.py            # Martingale reversal logic
-│   ├── telegram_bot.py        # Interactive 3x3 menu & UI
-│   ├── history_manager.py     # Persistence & PnL tracking
+│   ├── strategy.py            # Martingale reversal & Thread-safe CandleStore
+│   ├── telegram_bot.py        # Interactive 3x3 menu UI
+│   ├── history_manager.py     # Persistence, PnL & Bet tracking
 │   └── utils/
 │       ├── gsd_logger.py      # Centralized thread-safe logging
 │       └── metrics_manager.py # JSON health & stats exporter
 ├── run.py                     # Watchdog Supervisor (Production ENTRY POINT)
-├── data/
-│   ├── history.json           # Persistent trade data
-│   └── metrics.json           # Live health metrics
+├── history/                   # Persistent trade & PnL logs
+├── data/                      # Live metrics & Virtual balance
 └── .env                       # Secret keys & Configuration
 ```
 
@@ -63,16 +59,16 @@ A full-featured 3x3 menu for mobile management:
 ### 1. Requirements
 - Python 3.9+
 - USDC.e or Native USDC on Polygon network.
-- Polymarket CLOB API Keys.
+- Polymarket CLOB API Credentials.
 
-### 2. Quick Start
+### 2. Fast Installation
 ```bash
-git clone https://github.com/satyamsk05/5in.git
-cd 5in
+git clone https://github.com/satyamsk05/2in.git
+cd 2in
 
-# Setup Environment
+# Environment Setup
 python3 -m venv venv
-source venv/bin/activate  # Windows: .\venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
 
 # Configure Secrets
@@ -80,8 +76,8 @@ cp .env.example .env
 nano .env # Fill in keys
 ```
 
-### 3. Running the Bot (Recommended)
-Always use `run.py` in production to enable the auto-restart supervisor and centralized logging.
+### 3. Running in Production
+Always use `run.py`. It includes a **Watchdog Supervisor** that auto-restarts the bot if it crashes due to network issues or OOM.
 ```bash
 python3 run.py
 ```
@@ -90,23 +86,37 @@ python3 run.py
 
 ## 📊 Strategy: Martingale Streak-Reversal
 
-The bot monitors 5-minute price boundaries:
-1. **Streak Detection**: If the last 3 closes are in the same direction (e.g., all 🟢 or all 🔴), the bot signals a **Reversal**.
-2. **Order Execution**:
-   - **Level 1**: Market-fill (FOK) at the start of a streak.
-   - **Level 2+**: Protective Limit orders (GTC) to manage Martingale risk.
+The bot monitors 15-minute price market boundaries:
+1. **Detection**: If the last **3 closes** are in the same direction (e.g., 🔴🔴🔴), the bot signals a **Reversal** bet for the next candle.
+2. **Execution**:
+   - **Step 0**: Uses `FOK` (Fill-or-Kill) orders for instant entry.
+   - **Step 1+**: Uses `GTC` (Good-Till-Cancelled) orders with specific price brackets to manage recovery risk.
 3. **Martingale Ladder**:
-   - `$3 → $6 → $13 → $28 → $60` (Customizable in `strategy.py`).
-   - Resets to `$3` after a Win or reaching the Max Level cap.
+   - Default: `$3 → $6 → $13 → $28 → $60`
+   - Resets to `$3` immediately after any **WIN**.
 
 ---
 
-## 💡 Troubleshooting & FAQs
+## 📱 Telegram Command Reference
 
-- **Balance Discrepancy**: The bot automatically aggregates both Native USDC and USDC.e (bridged) for real balance reporting using redundant nodes.
-- **Data Stall Alerts**: If the bot hasn't received a WebSocket push from Polymarket in >30s, the connection is instantly refreshed and a Telegram alert is sent.
-- **No Trend Data**: Data resets on startup for session purity. After 5 minutes, the first candle will appear.
+| Command | Description |
+|:--- |:--- |
+| `🖥 Live` | View current market prices and timers |
+| `🏦 Wallet` | Show Virtual, Real, and Locked USDC balances |
+| `📦 Open` | List all currently active positions |
+| `📜 Log` | Show last 10 completed trades with results |
+| `📈 Trend` | Visual streak analysis (Circles: 🟢🔴⚪) |
+| `📊 PnL` | Detailed Profit/Loss summary for the last 7 days |
+| `🩺 System` | Health check: Uptime, WS status, and log size |
+| `⚡ Quick Bet` | Start an interactive manual trade flow |
+| `⏹ Pause/▶ Resume` | Toggle the bot's trading capability |
 
 ---
 
-© 2026 Polymarket Pro Bot Team. Managed via GSD Spec-Driven Development.
+## 💡 Troubleshooting
+- **API 429 Errors**: The bot now includes auto-semaphores to prevent this.
+- **Stale PIDs**: If the bot refuses to start, check `data/bot.pid`. v2.2 now handles this automatically.
+- **No Signal**: Bot needs 3 complete 15m candles to form a reversal signal.
+
+---
+© 2026 Polymarket Pro Bot Team. | **Hardened for 24/7 Autonomous Stability.**
